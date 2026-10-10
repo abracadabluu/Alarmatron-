@@ -32,13 +32,21 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK Environment
+        run: |
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          yes | sdkmanager --licenses || true
 
       - name: Add and Sync Capacitor Android
         run: |
           npx cap add android || true
           npx cap sync android
+
+      - name: Set SDK directory in local.properties
+        run: |
+          if [ -d "android" ]; then
+            echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+          fi
 
       - name: Configure Android Permissions & Device Administrator
         run: |
