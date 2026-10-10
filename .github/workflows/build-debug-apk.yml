@@ -1,0 +1,71 @@
+name: Build Alarmatron Debug APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    name: Build Android Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Web Application
+        run: npm run build
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Add and Sync Capacitor Android
+        run: |
+          npx cap add android || true
+          npx cap sync android
+
+      - name: Grant execute permission for gradlew
+        run: |
+          if [ -f "android/gradlew" ]; then
+            chmod +x android/gradlew
+          fi
+
+      - name: Build Android Debug APK with Gradle
+        run: |
+          cd android
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Locate and inspect generated APK
+        run: |
+          ls -la android/app/build/outputs/apk/debug/
+          echo "APK file generated successfully."
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: alarmatron-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+
+      - name: Job Summary
+        run: |
+          echo "### 📱 Alarmatron Debug APK Build Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "The debug APK artifact **alarmatron-debug-apk** is ready for download in the Artifacts section above." >> $GITHUB_STEP_SUMMARY
+          echo "- **Target**: Android Debug APK" >> $GITHUB_STEP_SUMMARY
+          echo "- **Package**: org.alarmatron.app" >> $GITHUB_STEP_SUMMARY

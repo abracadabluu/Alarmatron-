@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <circle cx="32" cy="32" r="28" fill="#ffffff" stroke="#202122" stroke-width="3"/>
+  <circle cx="32" cy="32" r="2.5" fill="#202122"/>
+  <!-- Clock hands at 07:00 -->
+  <line x1="32" y1="32" x2="32" y2="14" stroke="#202122" stroke-width="3" stroke-linecap="round"/>
+  <line x1="32" y1="32" x2="20" y2="40" stroke="#3366cc" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- Top bells -->
+  <path d="M16 10 C16 4 22 2 26 6" fill="none" stroke="#202122" stroke-width="3" stroke-linecap="round"/>
+  <path d="M48 10 C48 4 42 2 38 6" fill="none" stroke="#202122" stroke-width="3" stroke-linecap="round"/>
+  <!-- Legs -->
+  <line x1="14" y1="52" x2="8" y2="60" stroke="#202122" stroke-width="3" stroke-linecap="round"/>
+  <line x1="50" y1="52" x2="56" y2="60" stroke="#202122" stroke-width="3" stroke-linecap="round"/>
+</svg>

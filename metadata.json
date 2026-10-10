@@ -1,0 +1,6 @@
+{
+  "name": "Alarmatron",
+  "description": "A clean, Wikipedia-styled alarm clock for Android and web with custom repetitions, Web Audio chimes, and GitHub Actions APK build automation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

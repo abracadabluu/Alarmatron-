@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "Alarmatron",
+  "short_name": "Alarmatron",
+  "description": "A clean, Wikipedia-styled alarm clock for Android and web with custom repetitions and Web Audio chimes.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

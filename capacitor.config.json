@@ -1,0 +1,8 @@
+{
+  "appId": "org.alarmatron.app",
+  "appName": "Alarmatron",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}

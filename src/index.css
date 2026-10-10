@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --wiki-bg: #ffffff;
+    --wiki-surface: #f8f9fa;
+    --wiki-border: #a2a9b1;
+    --wiki-border-light: #c8ccd1;
+    --wiki-text-dark: #202122;
+    --wiki-text-muted: #54595d;
+    --wiki-link: #3366cc;
+    --wiki-link-hover: #2a4b8d;
+    --wiki-red: #d33d33;
+    --wiki-green: #14866d;
+  }
+
+  body {
+    background-color: var(--wiki-bg);
+    color: var(--wiki-text-dark);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Lato, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, h4, .font-wiki-serif {
+    font-family: 'Linux Libertine', 'Georgia', 'Times New Roman', 'Source Serif 4', serif;
+  }
+}
+
+/* Wikipedia classic article rules */
+.wiki-heading-rule {
+  border-bottom: 1px solid var(--wiki-border);
+}
+
+.wiki-infobox-table {
+  border: 1px solid var(--wiki-border);
+  background-color: var(--wiki-surface);
+}
+
+.wiki-link {
+  color: var(--wiki-link);
+  text-decoration: none;
+}
+
+.wiki-link:hover {
+  color: var(--wiki-link-hover);
+  text-decoration: underline;
+}
+
+/* Custom scrollbar matching clean Wikipedia readability */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f8f9fa;
+}
+::-webkit-scrollbar-thumb {
+  background: #c8ccd1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #a2a9b1;
+}
