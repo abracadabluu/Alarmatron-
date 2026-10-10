@@ -7,14 +7,14 @@ interface FloatingAddButtonProps {
 
 export const FloatingAddButton: React.FC<FloatingAddButtonProps> = ({ onClick }) => {
   return (
-    <div className="fixed bottom-6 right-6 sm:bottom-8 sm:right-8 z-40">
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 sm:left-auto sm:translate-x-0 sm:right-6">
       <button
         onClick={onClick}
-        aria-label="Set new alarm"
-        title="Set new alarm"
-        className="group flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-[#3366cc] text-white shadow-xl hover:bg-[#2a4b8d] active:scale-95 transition-all focus:outline-none focus:ring-3 focus:ring-[#3366cc]/40 border-2 border-white"
+        aria-label="Add Alarm"
+        className="group flex items-center justify-center gap-2 px-5 py-3.5 rounded-full bg-[#3366cc] text-white shadow-lg hover:bg-[#2a4b8d] active:scale-98 transition-all focus:outline-none focus:ring-3 focus:ring-[#3366cc]/40 border border-[#2a4b8d] font-sans text-sm font-semibold tracking-wide"
       >
-        <Plus className="w-7 h-7 sm:w-8 sm:h-8 stroke-[2.5] group-hover:rotate-90 transition-transform duration-200" />
+        <Plus className="w-5 h-5 stroke-[2.5] group-hover:rotate-90 transition-transform duration-200" />
+        <span>Add Alarm</span>
       </button>
     </div>
   );

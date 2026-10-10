@@ -1,17 +1,25 @@
-import { Alarm } from '../types';
+import { Alarm, AppSettings } from '../types';
 
 export const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 export const FULL_DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  use24HourFormat: false,
+  defaultSnoozeMinutes: 10,
+  vibrateByDefault: true,
+  overlayPermissionGranted: false,
+  deviceAdminEnabled: false,
+};
 
 export const DEFAULT_ALARMS: Alarm[] = [
   {
     id: 'alarm-1',
     hour: 7,
     minute: 0,
-    label: 'Morning Awakening',
+    label: 'Morning Alarm',
     days: [1, 2, 3, 4, 5], // Mon - Fri
     enabled: true,
-    sound: 'bell',
+    toneName: 'Default Chime',
     vibrate: true,
     snoozeMinutes: 10,
     createdAt: 1700000000000,
@@ -20,33 +28,34 @@ export const DEFAULT_ALARMS: Alarm[] = [
     id: 'alarm-2',
     hour: 8,
     minute: 30,
-    label: 'Team Standup & Daily Sync',
+    label: 'Work Standup',
     days: [1, 2, 3, 4, 5],
     enabled: true,
-    sound: 'marimba',
-    vibrate: false,
+    toneName: 'Default Chime',
+    vibrate: true,
     snoozeMinutes: 5,
     createdAt: 1700000010000,
   },
   {
     id: 'alarm-3',
     hour: 9,
-    minute: 45,
-    label: 'Weekend Rest & Reading',
+    minute: 0,
+    label: 'Weekend Rest',
     days: [0, 6], // Sun, Sat
     enabled: false,
-    sound: 'harp',
+    toneName: 'Default Chime',
     vibrate: true,
     snoozeMinutes: 15,
     createdAt: 1700000020000,
   },
 ];
 
-const STORAGE_KEY = 'alarmatron_alarms_v1';
+const ALARMS_STORAGE_KEY = 'alarmatron_alarms_v2';
+const SETTINGS_STORAGE_KEY = 'alarmatron_settings_v2';
 
 export function loadStoredAlarms(): Alarm[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(ALARMS_STORAGE_KEY);
     if (!raw) {
       saveStoredAlarms(DEFAULT_ALARMS);
       return DEFAULT_ALARMS;
@@ -57,35 +66,55 @@ export function loadStoredAlarms(): Alarm[] {
     }
     return DEFAULT_ALARMS;
   } catch (err) {
-    console.warn('Failed to load alarms from storage:', err);
+    console.warn('Failed to load alarms:', err);
     return DEFAULT_ALARMS;
   }
 }
 
 export function saveStoredAlarms(alarms: Alarm[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(alarms));
+    localStorage.setItem(ALARMS_STORAGE_KEY, JSON.stringify(alarms));
   } catch (err) {
-    console.warn('Failed to save alarms to storage:', err);
+    console.warn('Failed to save alarms:', err);
+  }
+}
+
+export function loadStoredSettings(): AppSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (!raw) return DEFAULT_SETTINGS;
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+export function saveStoredSettings(settings: AppSettings): void {
+  try {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch (err) {
+    console.warn('Failed to save settings:', err);
   }
 }
 
 /**
- * Format hour and minute to standard 12-hour string (e.g. "07:30 AM")
+ * Format time based on 12-hour or 24-hour setting
  */
-export function formatTime12h(hour: number, minute: number): { timeStr: string; period: 'AM' | 'PM' } {
-  const period: 'AM' | 'PM' = hour >= 12 ? 'PM' : 'AM';
+export function formatTimeDisplay(hour: number, minute: number, use24h: boolean = false): { timeStr: string; period?: string } {
+  const minStr = minute < 10 ? `0${minute}` : `${minute}`;
+  if (use24h) {
+    const hourStr = hour < 10 ? `0${hour}` : `${hour}`;
+    return { timeStr: `${hourStr}:${minStr}` };
+  }
+
+  const period = hour >= 12 ? 'PM' : 'AM';
   const displayHour = hour % 12 === 0 ? 12 : hour % 12;
   const hourStr = displayHour < 10 ? `0${displayHour}` : `${displayHour}`;
-  const minStr = minute < 10 ? `0${minute}` : `${minute}`;
-  return {
-    timeStr: `${hourStr}:${minStr}`,
-    period,
-  };
+  return { timeStr: `${hourStr}:${minStr}`, period };
 }
 
 /**
- * Formats repetition days into clean Wikipedia-style metadata text
+ * Formats repetition days into clean Wikipedia-style metadata
  */
 export function formatRepetition(days: number[]): string {
   if (!days || days.length === 0) {
@@ -107,7 +136,7 @@ export function formatRepetition(days: number[]): string {
 }
 
 /**
- * Computes the exact next trigger Date for a given alarm
+ * Computes next trigger Date for a given alarm
  */
 export function getNextTriggerDate(alarm: Alarm, fromDate: Date = new Date()): Date {
   const now = fromDate;
@@ -115,26 +144,20 @@ export function getNextTriggerDate(alarm: Alarm, fromDate: Date = new Date()): D
   const currentHour = now.getHours();
   const currentMinute = now.getMinutes();
 
-  // If one-off alarm
   if (!alarm.days || alarm.days.length === 0) {
     const candidate = new Date(now);
     candidate.setHours(alarm.hour, alarm.minute, 0, 0);
-
-    // If time is later today, return today
     if (alarm.hour > currentHour || (alarm.hour === currentHour && alarm.minute > currentMinute)) {
       return candidate;
     }
-    // Else tomorrow
     candidate.setDate(candidate.getDate() + 1);
     return candidate;
   }
 
-  // If recurring alarm
   for (let offset = 0; offset <= 7; offset++) {
     const checkDay = (currentDay + offset) % 7;
     if (alarm.days.includes(checkDay)) {
       if (offset === 0) {
-        // Today: must be in the future
         if (alarm.hour > currentHour || (alarm.hour === currentHour && alarm.minute > currentMinute)) {
           const target = new Date(now);
           target.setHours(alarm.hour, alarm.minute, 0, 0);
@@ -149,7 +172,6 @@ export function getNextTriggerDate(alarm: Alarm, fromDate: Date = new Date()): D
     }
   }
 
-  // Fallback
   const fallback = new Date(now);
   fallback.setDate(fallback.getDate() + 1);
   fallback.setHours(alarm.hour, alarm.minute, 0, 0);
@@ -178,24 +200,7 @@ export function formatTimeUntil(targetDate: Date, now: Date = new Date()): strin
     return `in ${diffHrs}h ${remainingMins}m`;
   }
   if (diffMin > 0) {
-    return `in ${diffMin} minute${diffMin === 1 ? '' : 's'}`;
+    return `in ${diffMin}m`;
   }
-  return `in ${diffSec} second${diffSec === 1 ? '' : 's'}`;
-}
-
-/**
- * Finds the earliest next alarm among enabled alarms
- */
-export function findEarliestAlarm(alarms: Alarm[], now: Date = new Date()): { alarm: Alarm; nextDate: Date } | null {
-  const enabledAlarms = alarms.filter((a) => a.enabled);
-  if (enabledAlarms.length === 0) return null;
-
-  let earliest: { alarm: Alarm; nextDate: Date } | null = null;
-  for (const alarm of enabledAlarms) {
-    const nextDate = getNextTriggerDate(alarm, now);
-    if (!earliest || nextDate.getTime() < earliest.nextDate.getTime()) {
-      earliest = { alarm, nextDate };
-    }
-  }
-  return earliest;
+  return `in ${diffSec}s`;
 }

@@ -40,6 +40,31 @@ jobs:
           npx cap add android || true
           npx cap sync android
 
+      - name: Configure Android Permissions & Device Administrator
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            # Insert permissions if not already present
+            if ! grep -q "SYSTEM_ALERT_WINDOW" "$MANIFEST"; then
+              sed -i '/<manifest/a \    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.VIBRATE" />' "$MANIFEST"
+            fi
+            
+            # Setup device_admin xml resource
+            mkdir -p android/app/src/main/res/xml
+            cat << 'EOF' > android/app/src/main/res/xml/device_admin.xml
+          <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-policies>
+                  <limit-password />
+                  <watch-login />
+                  <reset-password />
+                  <force-lock />
+                  <wipe-data />
+                  <expire-password />
+              </uses-policies>
+          </device-admin>
+          EOF
+          fi
+
       - name: Grant execute permission for gradlew
         run: |
           if [ -f "android/gradlew" ]; then

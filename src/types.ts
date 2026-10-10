@@ -1,5 +1,3 @@
-export type SoundType = 'bell' | 'digital' | 'marimba' | 'harp' | 'radar';
-
 export interface Alarm {
   id: string;
   hour: number;          // 0 - 23 (24h internal storage)
@@ -7,14 +5,22 @@ export interface Alarm {
   label: string;         // e.g. "Morning Wake Up"
   days: number[];        // 0 = Sun, 1 = Mon, ..., 6 = Sat. Empty array = Once
   enabled: boolean;
-  sound: SoundType;
+  toneName: string;      // Name of local audio file or default tone
+  toneData?: string;     // Base64 data URL for local audio file
   vibrate: boolean;
   snoozeMinutes: number; // 5, 10, 15
   createdAt: number;
-  lastDismissedDate?: string; // YYYY-MM-DD
 }
 
 export interface SnoozedAlarm {
   alarmId: string;
   triggerTimestamp: number; // epoch ms
+}
+
+export interface AppSettings {
+  use24HourFormat: boolean;
+  defaultSnoozeMinutes: number;
+  vibrateByDefault: boolean;
+  overlayPermissionGranted: boolean;
+  deviceAdminEnabled: boolean;
 }

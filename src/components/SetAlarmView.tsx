@@ -1,56 +1,167 @@
-import React, { useState } from 'react';
-import { ArrowLeft, Clock, Volume2, Bell, Check, Sparkles, Smartphone } from 'lucide-react';
-import { Alarm, SoundType } from '../types';
+import React, { useState, useRef } from 'react';
+import {
+  ArrowLeft,
+  Clock,
+  Music,
+  FolderOpen,
+  Play,
+  Square,
+  Check,
+  Trash2,
+  Delete,
+  ShieldAlert,
+  Smartphone,
+  Sliders,
+} from 'lucide-react';
+import { Alarm, AppSettings } from '../types';
 import { DAY_NAMES, FULL_DAY_NAMES } from '../utils/alarmUtils';
-import { playChimeNote } from '../utils/audioEngine';
+import { previewTone } from '../utils/audioEngine';
+import { NumpadModal } from './NumpadModal';
+import {
+  requestDisplayOverOtherApps,
+  requestDeviceAdministrator,
+} from '../utils/androidUtils';
 
 interface SetAlarmViewProps {
   initialAlarm?: Alarm | null;
+  use24h: boolean;
+  defaultSnooze: number;
+  defaultVibrate: boolean;
+  settings: AppSettings;
+  onUpdateSettings: (newSettings: AppSettings) => void;
   onSave: (alarmData: Omit<Alarm, 'id' | 'createdAt'>, existingId?: string) => void;
   onCancel: () => void;
 }
 
-const SOUND_OPTIONS: { id: SoundType; name: string; description: string }[] = [
-  { id: 'bell', name: 'Westminster Bell', description: 'Harmonic resonant bell chimes' },
-  { id: 'digital', name: 'Digital Electronic', description: 'Classic dual-tone rapid alert pulses' },
-  { id: 'marimba', name: 'Crystal Marimba', description: 'Warm wooden organic acoustic tones' },
-  { id: 'harp', name: 'Gentle Harp', description: 'Soothing ascending acoustic arpeggio' },
-  { id: 'radar', name: 'Radar Pulse', description: 'High-visibility frequency sweep' },
-];
-
-const PRESET_LABELS = [
-  'Morning Awakening',
-  'Daily Standup & Sync',
-  'Medication Schedule',
-  'Physical Exercise',
-  'Deep Work Session',
-  'Evening Wind Down',
-];
-
 export const SetAlarmView: React.FC<SetAlarmViewProps> = ({
   initialAlarm,
+  use24h,
+  defaultSnooze,
+  defaultVibrate,
+  settings,
+  onUpdateSettings,
   onSave,
   onCancel,
 }) => {
-  // Convert 24h to 12h display state
+  // 1. Time State
   const initHour = initialAlarm ? initialAlarm.hour : 7;
   const initMinute = initialAlarm ? initialAlarm.minute : 0;
   const initPeriod: 'AM' | 'PM' = initHour >= 12 ? 'PM' : 'AM';
   const init12Hour = initHour % 12 === 0 ? 12 : initHour % 12;
 
   const [hour12, setHour12] = useState<number>(init12Hour);
+  const [hour24, setHour24] = useState<number>(initHour);
   const [minute, setMinute] = useState<number>(initMinute);
   const [period, setPeriod] = useState<'AM' | 'PM'>(initPeriod);
+
+  // Active focus in numpad: 'hour' or 'minute'
+  const [activeTimePart, setActiveTimePart] = useState<'hour' | 'minute'>('hour');
+
+  // 2. Label State
   const [label, setLabel] = useState<string>(initialAlarm ? initialAlarm.label : '');
+
+  // 3. Repetition State (7 days)
   const [selectedDays, setSelectedDays] = useState<number[]>(
     initialAlarm ? [...initialAlarm.days] : [1, 2, 3, 4, 5] // default weekdays
   );
-  const [sound, setSound] = useState<SoundType>(initialAlarm ? initialAlarm.sound : 'bell');
-  const [vibrate, setVibrate] = useState<boolean>(initialAlarm ? initialAlarm.vibrate : true);
-  const [snoozeMinutes, setSnoozeMinutes] = useState<number>(
-    initialAlarm ? initialAlarm.snoozeMinutes : 10
-  );
 
+  // 4. Snooze State & Numpad Modal
+  const [snoozeMinutes, setSnoozeMinutes] = useState<number>(
+    initialAlarm ? initialAlarm.snoozeMinutes : defaultSnooze
+  );
+  const [isSnoozeNumpadOpen, setIsSnoozeNumpadOpen] = useState<boolean>(false);
+
+  // 5. Tone State (Local storage music)
+  const [toneName, setToneName] = useState<string>(
+    initialAlarm?.toneName || 'Default Chime'
+  );
+  const [toneData, setToneData] = useState<string | undefined>(
+    initialAlarm?.toneData
+  );
+  const [isPlayingPreview, setIsPlayingPreview] = useState<boolean>(false);
+  const stopAudioRef = useRef<(() => void) | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // 6. Android Permissions State
+  const [overlayGranted, setOverlayGranted] = useState<boolean>(
+    settings.overlayPermissionGranted
+  );
+  const [deviceAdminActive, setDeviceAdminActive] = useState<boolean>(
+    settings.deviceAdminEnabled
+  );
+  const [showAdminNotice, setShowAdminNotice] = useState<boolean>(false);
+
+  // Numpad key input for Time
+  const handleNumpadDigit = (digit: string) => {
+    const num = parseInt(digit, 10);
+    if (activeTimePart === 'hour') {
+      if (!use24h) {
+        // 12h format (1-12)
+        const currentStr = hour12.toString();
+        let nextVal = parseInt(currentStr + digit, 10);
+        if (nextVal > 12) nextVal = num;
+        if (nextVal === 0) nextVal = 1;
+        setHour12(nextVal);
+        // If user typed 2 digits or typed a number >= 2, advance to minute
+        if (nextVal >= 2 || currentStr.length === 1) {
+          setActiveTimePart('minute');
+        }
+      } else {
+        // 24h format (0-23)
+        let nextVal = parseInt(hour24.toString() + digit, 10);
+        if (nextVal > 23) nextVal = num;
+        setHour24(nextVal);
+        if (nextVal >= 3) {
+          setActiveTimePart('minute');
+        }
+      }
+    } else {
+      // Minute (0-59)
+      const currentStr = minute.toString();
+      let nextVal = parseInt(currentStr + digit, 10);
+      if (nextVal > 59) nextVal = num;
+      setMinute(nextVal);
+    }
+  };
+
+  const handleNumpadBackspace = () => {
+    if (activeTimePart === 'minute') {
+      const str = minute.toString();
+      if (str.length > 1) {
+        setMinute(parseInt(str.slice(0, -1), 10));
+      } else {
+        setMinute(0);
+        setActiveTimePart('hour');
+      }
+    } else {
+      if (!use24h) {
+        const str = hour12.toString();
+        if (str.length > 1) {
+          setHour12(parseInt(str.slice(0, -1), 10));
+        } else {
+          setHour12(1);
+        }
+      } else {
+        const str = hour24.toString();
+        if (str.length > 1) {
+          setHour24(parseInt(str.slice(0, -1), 10));
+        } else {
+          setHour24(0);
+        }
+      }
+    }
+  };
+
+  const handleNumpadClear = () => {
+    if (activeTimePart === 'hour') {
+      if (!use24h) setHour12(1);
+      else setHour24(0);
+    } else {
+      setMinute(0);
+    }
+  };
+
+  // Day toggle
   const toggleDay = (dayIndex: number) => {
     if (selectedDays.includes(dayIndex)) {
       setSelectedDays(selectedDays.filter((d) => d !== dayIndex));
@@ -59,176 +170,186 @@ export const SetAlarmView: React.FC<SetAlarmViewProps> = ({
     }
   };
 
-  const setShortcut = (preset: 'all' | 'weekdays' | 'weekends' | 'none') => {
-    switch (preset) {
-      case 'all':
-        setSelectedDays([0, 1, 2, 3, 4, 5, 6]);
-        break;
-      case 'weekdays':
-        setSelectedDays([1, 2, 3, 4, 5]);
-        break;
-      case 'weekends':
-        setSelectedDays([0, 6]);
-        break;
-      case 'none':
-        setSelectedDays([]);
-        break;
+  const selectAllDays = () => {
+    if (selectedDays.length === 7) {
+      setSelectedDays([]); // deselect
+    } else {
+      setSelectedDays([0, 1, 2, 3, 4, 5, 6]); // make it daily
     }
   };
 
+  // Tone file pick
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const name = file.name;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setToneName(name);
+      setToneData(reader.result as string);
+      if (stopAudioRef.current) {
+        stopAudioRef.current();
+        stopAudioRef.current = null;
+        setIsPlayingPreview(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const togglePreview = () => {
+    if (isPlayingPreview) {
+      if (stopAudioRef.current) {
+        stopAudioRef.current();
+        stopAudioRef.current = null;
+      }
+      setIsPlayingPreview(false);
+    } else {
+      const stop = previewTone(toneData);
+      stopAudioRef.current = stop;
+      setIsPlayingPreview(true);
+      setTimeout(() => setIsPlayingPreview(false), 8000);
+    }
+  };
+
+  // Android Permission actions
+  const handleRequestOverlay = async () => {
+    await requestDisplayOverOtherApps();
+    setOverlayGranted(true);
+    onUpdateSettings({ ...settings, overlayPermissionGranted: true });
+  };
+
+  const handleToggleDeviceAdmin = async () => {
+    if (!deviceAdminActive) {
+      setShowAdminNotice(true);
+    } else {
+      setDeviceAdminActive(false);
+      onUpdateSettings({ ...settings, deviceAdminEnabled: false });
+    }
+  };
+
+  const confirmDeviceAdmin = async () => {
+    setShowAdminNotice(false);
+    await requestDeviceAdministrator();
+    setDeviceAdminActive(true);
+    onUpdateSettings({ ...settings, deviceAdminEnabled: true });
+  };
+
   const handleSave = () => {
-    // Convert 12h + period back to 24h
-    let h24 = hour12 % 12;
-    if (period === 'PM') {
-      h24 += 12;
+    if (stopAudioRef.current) stopAudioRef.current();
+
+    let finalHour = 0;
+    if (use24h) {
+      finalHour = hour24;
+    } else {
+      finalHour = hour12 % 12;
+      if (period === 'PM') finalHour += 12;
     }
 
     onSave(
       {
-        hour: h24,
+        hour: finalHour,
         minute,
         label: label.trim() || 'Alarm',
         days: selectedDays,
         enabled: true,
-        sound,
-        vibrate,
+        toneName,
+        toneData,
+        vibrate: initialAlarm ? initialAlarm.vibrate : defaultVibrate,
         snoozeMinutes,
       },
-      initialAlarm ? initialAlarm.id : undefined
+      initialAlarm?.id
     );
   };
 
-  const adjustHour = (delta: number) => {
-    let next = hour12 + delta;
-    if (next > 12) next = 1;
-    if (next < 1) next = 12;
-    setHour12(next);
+  const handleCancel = () => {
+    if (stopAudioRef.current) stopAudioRef.current();
+    onCancel();
   };
 
-  const adjustMinute = (delta: number) => {
-    let next = minute + delta;
-    if (next >= 60) next = 0;
-    if (next < 0) next = 59;
-    setMinute(next);
-  };
+  // Repetition text summary
+  const repetitionStatus =
+    selectedDays.length === 7
+      ? 'Daily (All 7 days)'
+      : selectedDays.length === 0
+      ? 'Once (No repeat)'
+      : `Weekly (${selectedDays.map((d) => DAY_NAMES[d]).join(', ')})`;
 
   return (
-    <div className="max-w-3xl mx-auto pb-24 animate-in fade-in duration-150">
-      {/* Wikipedia Article-Style Navigation Header */}
-      <div className="border-b border-[#a2a9b1] pb-3 mb-6">
+    <div className="max-w-md mx-auto pb-24">
+      {/* Top Header */}
+      <div className="border-b border-[#a2a9b1] pb-3 mb-5 flex items-center justify-between">
         <button
-          onClick={onCancel}
-          className="inline-flex items-center gap-1.5 text-xs text-[#3366cc] hover:underline font-medium mb-2"
+          onClick={handleCancel}
+          className="inline-flex items-center gap-1.5 text-xs text-[#3366cc] hover:underline font-medium"
         >
-          <ArrowLeft className="w-3.5 h-3.5" />
-          Return to Alarms List
+          <ArrowLeft className="w-4 h-4" />
+          Back to Alarms
         </button>
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-2xl sm:text-3xl font-normal font-wiki-serif text-[#202122]">
-            {initialAlarm ? 'Edit Alarm Configuration' : 'Set New Alarm'}
-          </h2>
-          <span className="text-xs text-[#54595d] font-sans">
-            Section 1.1 · Alarmatron
-          </span>
-        </div>
+        <h2 className="text-xl font-normal font-wiki-serif text-[#202122]">
+          {initialAlarm ? 'Edit Alarm' : 'Set Alarm'}
+        </h2>
+        <div className="w-16" />
       </div>
 
-      <div className="space-y-8">
-        {/* Section 1: Time Selection */}
-        <div className="border border-[#a2a9b1] bg-white p-5 sm:p-6 shadow-2xs">
-          <div className="border-b border-[#eaecf0] pb-2 mb-5 flex items-center justify-between">
-            <h3 className="font-wiki-serif text-base font-bold text-[#202122] flex items-center gap-2">
-              <Clock className="w-4 h-4 text-[#3366cc]" />
-              1. Scheduled Time
-            </h3>
-            <span className="text-xs text-[#54595d]">
-              Target: {hour12 < 10 ? `0${hour12}` : hour12}:{minute < 10 ? `0${minute}` : minute} {period}
+      <div className="space-y-4">
+        {/* 1. Time Configuration with Numpad */}
+        <div className="border border-[#a2a9b1] bg-white p-4 shadow-2xs">
+          <div className="text-[11px] font-semibold text-[#54595d] uppercase tracking-wider mb-2 flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-[#3366cc]" />
+              Time
+            </span>
+            <span className="text-[11px] font-normal text-[#72777d]">
+              Tap digits on numpad to set
             </span>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-6 py-4 bg-[#f8f9fa] border border-[#c8ccd1]">
+          {/* Time Readout */}
+          <div className="flex items-center justify-center gap-3 py-3 bg-[#f8f9fa] border border-[#c8ccd1] mb-3">
             {/* Hour Block */}
-            <div className="flex flex-col items-center">
-              <span className="text-[11px] font-semibold text-[#54595d] uppercase tracking-wider mb-1">
-                Hours
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => adjustHour(-1)}
-                  className="w-8 h-8 rounded-xs border border-[#a2a9b1] bg-white text-[#202122] hover:bg-[#eaecf0] active:bg-[#c8ccd1] text-base font-bold flex items-center justify-center select-none"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  min="1"
-                  max="12"
-                  value={hour12}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value, 10);
-                    if (!isNaN(val) && val >= 1 && val <= 12) setHour12(val);
-                  }}
-                  className="w-16 h-14 text-3xl font-bold font-wiki-serif text-center bg-white border border-[#a2a9b1] rounded-xs tabular-nums text-[#202122] focus:outline-none focus:border-[#3366cc]"
-                />
-                <button
-                  type="button"
-                  onClick={() => adjustHour(1)}
-                  className="w-8 h-8 rounded-xs border border-[#a2a9b1] bg-white text-[#202122] hover:bg-[#eaecf0] active:bg-[#c8ccd1] text-base font-bold flex items-center justify-center select-none"
-                >
-                  +
-                </button>
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTimePart('hour')}
+              className={`px-3 py-1 text-3xl font-bold font-wiki-serif rounded-xs tabular-nums transition-all border ${
+                activeTimePart === 'hour'
+                  ? 'border-[#3366cc] bg-white text-[#3366cc] ring-2 ring-[#3366cc]/20'
+                  : 'border-transparent text-[#202122] hover:bg-white'
+              }`}
+            >
+              {!use24h
+                ? hour12 < 10
+                  ? `0${hour12}`
+                  : hour12
+                : hour24 < 10
+                ? `0${hour24}`
+                : hour24}
+            </button>
 
-            <span className="text-3xl font-bold font-wiki-serif text-[#a2a9b1] -mt-1 hidden sm:inline select-none">
+            <span className="text-2xl font-bold font-wiki-serif text-[#a2a9b1] select-none">
               :
             </span>
 
             {/* Minute Block */}
-            <div className="flex flex-col items-center">
-              <span className="text-[11px] font-semibold text-[#54595d] uppercase tracking-wider mb-1">
-                Minutes
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => adjustMinute(-1)}
-                  className="w-8 h-8 rounded-xs border border-[#a2a9b1] bg-white text-[#202122] hover:bg-[#eaecf0] active:bg-[#c8ccd1] text-base font-bold flex items-center justify-center select-none"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  min="0"
-                  max="59"
-                  value={minute < 10 ? `0${minute}` : minute}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value, 10);
-                    if (!isNaN(val) && val >= 0 && val <= 59) setMinute(val);
-                  }}
-                  className="w-16 h-14 text-3xl font-bold font-wiki-serif text-center bg-white border border-[#a2a9b1] rounded-xs tabular-nums text-[#202122] focus:outline-none focus:border-[#3366cc]"
-                />
-                <button
-                  type="button"
-                  onClick={() => adjustMinute(1)}
-                  className="w-8 h-8 rounded-xs border border-[#a2a9b1] bg-white text-[#202122] hover:bg-[#eaecf0] active:bg-[#c8ccd1] text-base font-bold flex items-center justify-center select-none"
-                >
-                  +
-                </button>
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTimePart('minute')}
+              className={`px-3 py-1 text-3xl font-bold font-wiki-serif rounded-xs tabular-nums transition-all border ${
+                activeTimePart === 'minute'
+                  ? 'border-[#3366cc] bg-white text-[#3366cc] ring-2 ring-[#3366cc]/20'
+                  : 'border-transparent text-[#202122] hover:bg-white'
+              }`}
+            >
+              {minute < 10 ? `0${minute}` : minute}
+            </button>
 
             {/* AM / PM Segmented Control */}
-            <div className="flex flex-col items-center">
-              <span className="text-[11px] font-semibold text-[#54595d] uppercase tracking-wider mb-1">
-                Period
-              </span>
-              <div className="flex rounded-xs border border-[#a2a9b1] overflow-hidden bg-white">
+            {!use24h && (
+              <div className="flex rounded-xs border border-[#a2a9b1] overflow-hidden bg-white ml-2">
                 <button
                   type="button"
                   onClick={() => setPeriod('AM')}
-                  className={`px-4 h-14 text-sm font-bold tracking-wider transition-colors min-w-[54px] ${
+                  className={`px-2.5 py-1 text-xs font-bold transition-colors ${
                     period === 'AM'
                       ? 'bg-[#3366cc] text-white'
                       : 'text-[#202122] hover:bg-[#eaecf0]'
@@ -239,7 +360,7 @@ export const SetAlarmView: React.FC<SetAlarmViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setPeriod('PM')}
-                  className={`px-4 h-14 text-sm font-bold tracking-wider transition-colors min-w-[54px] border-l border-[#a2a9b1] ${
+                  className={`px-2.5 py-1 text-xs font-bold transition-colors border-l border-[#a2a9b1] ${
                     period === 'PM'
                       ? 'bg-[#3366cc] text-white'
                       : 'text-[#202122] hover:bg-[#eaecf0]'
@@ -248,261 +369,331 @@ export const SetAlarmView: React.FC<SetAlarmViewProps> = ({
                   PM
                 </button>
               </div>
-            </div>
+            )}
           </div>
 
-          {/* Quick minute offsets */}
-          <div className="mt-3 flex flex-wrap items-center justify-center gap-2 text-xs">
-            <span className="text-[#54595d] text-[11px]">Quick adjustments:</span>
-            {[0, 15, 30, 45].map((m) => (
+          {/* Interactive Numpad for Setting Time */}
+          <div className="bg-[#f8f9fa] border border-[#c8ccd1] p-2.5 rounded-xs">
+            <div className="grid grid-cols-3 gap-1">
+              {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
+                <button
+                  key={digit}
+                  type="button"
+                  onClick={() => handleNumpadDigit(digit)}
+                  className="h-10 bg-white hover:bg-[#eaecf0] active:bg-[#c8ccd1] border border-[#c8ccd1] rounded-xs text-base font-bold font-wiki-serif text-[#202122] select-none transition-colors"
+                >
+                  {digit}
+                </button>
+              ))}
               <button
-                key={m}
                 type="button"
-                onClick={() => setMinute(m)}
-                className={`px-2 py-0.5 border text-xs rounded-xs transition-colors ${
-                  minute === m
-                    ? 'border-[#3366cc] bg-[#f0f4fc] text-[#3366cc] font-semibold'
-                    : 'border-[#c8ccd1] bg-white text-[#54595d] hover:bg-[#eaecf0]'
-                }`}
+                onClick={handleNumpadClear}
+                className="h-10 bg-white hover:bg-[#eaecf0] active:bg-[#c8ccd1] border border-[#c8ccd1] rounded-xs text-xs font-medium text-[#54595d] select-none"
               >
-                :{m < 10 ? `0${m}` : m}
+                Clear
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={() => handleNumpadDigit('0')}
+                className="h-10 bg-white hover:bg-[#eaecf0] active:bg-[#c8ccd1] border border-[#c8ccd1] rounded-xs text-base font-bold font-wiki-serif text-[#202122] select-none"
+              >
+                0
+              </button>
+              <button
+                type="button"
+                onClick={handleNumpadBackspace}
+                className="h-10 bg-white hover:bg-[#eaecf0] active:bg-[#c8ccd1] border border-[#c8ccd1] rounded-xs flex items-center justify-center text-[#54595d] select-none"
+              >
+                <Delete className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Section 2: Repetition Schedule */}
-        <div className="border border-[#a2a9b1] bg-white p-5 sm:p-6 shadow-2xs">
-          <div className="border-b border-[#eaecf0] pb-2 mb-4 flex items-center justify-between">
-            <h3 className="font-wiki-serif text-base font-bold text-[#202122]">
-              2. Repetition Schedule
-            </h3>
-            <span className="text-xs text-[#54595d]">
-              {selectedDays.length === 0
-                ? 'Plays Once'
-                : selectedDays.length === 7
-                ? 'Every Single Day'
-                : `${selectedDays.length} days active`}
+        {/* 2. Label Input (written after setting time) */}
+        <div className="border border-[#a2a9b1] bg-white p-4 shadow-2xs">
+          <label className="block text-[11px] font-semibold text-[#54595d] uppercase tracking-wider mb-1.5">
+            Label
+          </label>
+          <input
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="e.g. Morning Alarm"
+            className="w-full px-3 py-2 text-sm bg-white border border-[#a2a9b1] rounded-xs focus:outline-none focus:border-[#3366cc] focus:ring-1 focus:ring-[#3366cc]"
+          />
+        </div>
+
+        {/* 3. Repetition in a Vertical Bar (Seven Weekdays) */}
+        <div className="border border-[#a2a9b1] bg-white p-4 shadow-2xs">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-semibold text-[#54595d] uppercase tracking-wider">
+              Repetition
+            </span>
+            <span className="text-xs text-[#3366cc] font-medium">
+              {repetitionStatus}
             </span>
           </div>
 
-          {/* Day of Week Buttons */}
-          <div className="grid grid-cols-7 gap-1.5 sm:gap-2 mb-4">
-            {DAY_NAMES.map((name, idx) => {
-              const isSelected = selectedDays.includes(idx);
-              return (
-                <button
-                  key={name}
-                  type="button"
-                  onClick={() => toggleDay(idx)}
-                  title={FULL_DAY_NAMES[idx]}
-                  className={`py-3 sm:py-3.5 border rounded-xs text-xs font-semibold flex flex-col items-center justify-center gap-0.5 transition-all select-none min-h-[48px] ${
-                    isSelected
-                      ? 'border-[#14866d] bg-[#e8f6f3] text-[#14866d] ring-1 ring-[#14866d]'
-                      : 'border-[#c8ccd1] bg-[#f8f9fa] text-[#54595d] hover:bg-[#eaecf0]'
-                  }`}
-                >
-                  <span className="text-sm font-bold font-wiki-serif">{name.charAt(0)}</span>
-                  <span className="text-[10px] hidden xs:inline">{name}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Shortcut buttons */}
-          <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[#eaecf0]">
-            <span className="text-[11px] text-[#54595d]">Presets:</span>
-            <button
-              type="button"
-              onClick={() => setShortcut('weekdays')}
-              className="px-2.5 py-1 text-xs border border-[#c8ccd1] bg-[#f8f9fa] hover:bg-[#eaecf0] text-[#202122] rounded-xs"
-            >
-              Weekdays (Mon–Fri)
-            </button>
-            <button
-              type="button"
-              onClick={() => setShortcut('weekends')}
-              className="px-2.5 py-1 text-xs border border-[#c8ccd1] bg-[#f8f9fa] hover:bg-[#eaecf0] text-[#202122] rounded-xs"
-            >
-              Weekends (Sat–Sun)
-            </button>
-            <button
-              type="button"
-              onClick={() => setShortcut('all')}
-              className="px-2.5 py-1 text-xs border border-[#c8ccd1] bg-[#f8f9fa] hover:bg-[#eaecf0] text-[#202122] rounded-xs"
-            >
-              Every Day
-            </button>
-            <button
-              type="button"
-              onClick={() => setShortcut('none')}
-              className="px-2.5 py-1 text-xs border border-[#c8ccd1] bg-[#f8f9fa] hover:bg-[#eaecf0] text-[#54595d] rounded-xs"
-            >
-              Once (No repeat)
-            </button>
-          </div>
-        </div>
-
-        {/* Section 3: Label & Purpose */}
-        <div className="border border-[#a2a9b1] bg-white p-5 sm:p-6 shadow-2xs">
-          <div className="border-b border-[#eaecf0] pb-2 mb-4">
-            <h3 className="font-wiki-serif text-base font-bold text-[#202122]">
-              3. Alarm Label & Identification
-            </h3>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-[#54595d] uppercase tracking-wider mb-1.5">
-              Label Name
-            </label>
-            <input
-              type="text"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder="e.g. Morning Awakening, Take Medicine, Standup"
-              className="w-full px-3 py-2 text-sm bg-white border border-[#a2a9b1] rounded-xs focus:outline-none focus:border-[#3366cc] focus:ring-1 focus:ring-[#3366cc]"
-            />
-          </div>
-
-          <div className="mt-3">
-            <span className="text-[11px] text-[#54595d] block mb-1.5">Suggested encyclopedic titles:</span>
-            <div className="flex flex-wrap gap-1.5">
-              {PRESET_LABELS.map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => setLabel(preset)}
-                  className="px-2 py-0.5 text-xs text-[#3366cc] bg-[#f0f4fc] hover:bg-[#e1ecfc] border border-[#c0d4f6] rounded-xs transition-colors"
-                >
-                  {preset}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Section 4: Sound, Vibration & Snooze */}
-        <div className="border border-[#a2a9b1] bg-white p-5 sm:p-6 shadow-2xs">
-          <div className="border-b border-[#eaecf0] pb-2 mb-4">
-            <h3 className="font-wiki-serif text-base font-bold text-[#202122]">
-              4. Acoustic Tone & Snooze Properties
-            </h3>
-          </div>
-
-          <div className="space-y-4">
-            {/* Sound options list */}
-            <div>
-              <label className="block text-xs font-semibold text-[#54595d] uppercase tracking-wider mb-2">
-                Acoustic Tone Selection
-              </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {SOUND_OPTIONS.map((opt) => (
-                  <div
-                    key={opt.id}
-                    onClick={() => setSound(opt.id)}
-                    className={`p-3 border rounded-xs cursor-pointer flex items-center justify-between gap-2 transition-all ${
-                      sound === opt.id
-                        ? 'border-[#3366cc] bg-[#f0f4fc]'
-                        : 'border-[#c8ccd1] bg-[#f8f9fa] hover:bg-[#eaecf0]'
+          {/* Vertical Bar layout with Seven weekday buttons */}
+          <div className="border border-[#c8ccd1] bg-[#f8f9fa] p-3 rounded-xs space-y-2">
+            <div className="grid grid-cols-7 gap-1">
+              {DAY_NAMES.map((name, idx) => {
+                const isSelected = selectedDays.includes(idx);
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={() => toggleDay(idx)}
+                    title={FULL_DAY_NAMES[idx]}
+                    className={`py-2.5 border rounded-xs text-xs font-semibold flex flex-col items-center justify-center transition-all select-none min-h-[44px] ${
+                      isSelected
+                        ? 'border-[#14866d] bg-[#e8f6f3] text-[#14866d] ring-1 ring-[#14866d]'
+                        : 'border-[#c8ccd1] bg-white text-[#54595d] hover:bg-[#eaecf0]'
                     }`}
                   >
-                    <div>
-                      <div className="text-xs font-bold text-[#202122] flex items-center gap-1.5">
-                        {opt.name}
-                        {sound === opt.id && (
-                          <Check className="w-3.5 h-3.5 text-[#3366cc]" />
-                        )}
-                      </div>
-                      <div className="text-[11px] text-[#54595d]">{opt.description}</div>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        playChimeNote(opt.id);
-                      }}
-                      title="Preview this sound tone"
-                      className="p-1.5 text-[#3366cc] hover:bg-white rounded-xs border border-transparent hover:border-[#c0d4f6] transition-colors shrink-0"
-                    >
-                      <Volume2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
+                    <span className="text-sm font-bold font-wiki-serif">{name.charAt(0)}</span>
+                    <span className="text-[9px]">{name}</span>
+                  </button>
+                );
+              })}
             </div>
 
-            {/* Vibration & Snooze Settings */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-[#eaecf0]">
-              {/* Vibration Toggle */}
-              <div className="flex items-center justify-between p-3 border border-[#c8ccd1] bg-[#f8f9fa] rounded-xs">
-                <div>
-                  <div className="text-xs font-bold text-[#202122] flex items-center gap-1.5">
-                    <Smartphone className="w-3.5 h-3.5 text-[#54595d]" />
-                    Haptic Vibration
-                  </div>
-                  <div className="text-[11px] text-[#54595d]">Vibrate phone while ringing</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setVibrate(!vibrate)}
-                  className={`w-11 h-6 rounded-full p-0.5 flex items-center transition-colors ${
-                    vibrate ? 'bg-[#14866d]' : 'bg-[#c8ccd1]'
-                  }`}
-                >
-                  <div
-                    className={`w-5 h-5 rounded-full bg-white shadow-xs transform transition-transform ${
-                      vibrate ? 'translate-x-5' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-
-              {/* Snooze Interval */}
-              <div className="p-3 border border-[#c8ccd1] bg-[#f8f9fa] rounded-xs">
-                <div className="text-xs font-bold text-[#202122] mb-1.5">
-                  Snooze Duration
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {[5, 10, 15].map((mins) => (
-                    <button
-                      key={mins}
-                      type="button"
-                      onClick={() => setSnoozeMinutes(mins)}
-                      className={`flex-1 py-1 text-xs font-medium border rounded-xs transition-colors ${
-                        snoozeMinutes === mins
-                          ? 'border-[#3366cc] bg-[#3366cc] text-white'
-                          : 'border-[#c8ccd1] bg-white text-[#202122] hover:bg-[#eaecf0]'
-                      }`}
-                    >
-                      {mins} mins
-                    </button>
-                  ))}
-                </div>
-              </div>
+            {/* Shortcut button to make it daily or clear */}
+            <div className="pt-2 border-t border-[#eaecf0] flex items-center justify-between text-xs">
+              <span className="text-[#54595d] text-[11px]">Select days weekly:</span>
+              <button
+                type="button"
+                onClick={selectAllDays}
+                className="px-2.5 py-1 border border-[#a2a9b1] bg-white hover:bg-[#eaecf0] text-[#202122] rounded-xs text-xs font-medium"
+              >
+                {selectedDays.length === 7 ? 'Clear All' : 'Select All (Daily)'}
+              </button>
             </div>
           </div>
         </div>
 
-        {/* Action Button Bar */}
-        <div className="sticky bottom-0 bg-white/95 backdrop-blur-xs border-t border-[#a2a9b1] p-4 flex items-center justify-end gap-3 z-30 shadow-lg">
+        {/* 4. Vertical Bar with 'Snooze' and 'Set duration' on the right side */}
+        <div className="border border-[#a2a9b1] bg-white p-4 shadow-2xs">
+          <div className="flex items-center justify-between">
+            {/* Left: 'Snooze' text */}
+            <div>
+              <span className="text-[11px] font-semibold text-[#54595d] uppercase tracking-wider block">
+                Snooze
+              </span>
+              <span className="text-sm font-medium text-[#202122]">
+                {snoozeMinutes} minutes
+              </span>
+            </div>
+
+            {/* Right: 'Set duration' button using numpad */}
+            <button
+              type="button"
+              onClick={() => setIsSnoozeNumpadOpen(true)}
+              className="px-3.5 py-2 text-xs font-medium text-[#3366cc] bg-[#f0f4fc] hover:bg-[#e1ecfc] border border-[#c0d4f6] rounded-xs transition-colors flex items-center gap-1.5 shadow-2xs"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>Set duration</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 5. Tone Selection (Music from local storage) */}
+        <div className="border border-[#a2a9b1] bg-white p-4 shadow-2xs">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-semibold text-[#54595d] uppercase tracking-wider flex items-center gap-1.5">
+              <Music className="w-3.5 h-3.5 text-[#3366cc]" />
+              Tone
+            </span>
+            <span className="text-xs text-[#54595d]">
+              Local device storage
+            </span>
+          </div>
+
+          <div className="bg-[#f8f9fa] border border-[#c8ccd1] p-3 rounded-xs space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-[#202122] truncate max-w-[220px]">
+                {toneName}
+              </span>
+
+              <button
+                type="button"
+                onClick={togglePreview}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold border rounded-xs transition-colors shrink-0 ${
+                  isPlayingPreview
+                    ? 'bg-[#d33d33] text-white border-[#d33d33]'
+                    : 'bg-white text-[#3366cc] border-[#a2a9b1] hover:bg-[#eaecf0]'
+                }`}
+              >
+                {isPlayingPreview ? (
+                  <>
+                    <Square className="w-3 h-3 fill-current" />
+                    <span>Stop</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-3 h-3 fill-current" />
+                    <span>Preview</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              accept="audio/*"
+              className="hidden"
+            />
+
+            <div className="pt-2 border-t border-[#eaecf0] flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#202122] bg-white hover:bg-[#eaecf0] border border-[#a2a9b1] rounded-xs shadow-2xs"
+              >
+                <FolderOpen className="w-3.5 h-3.5 text-[#3366cc]" />
+                <span>Choose Music from Device...</span>
+              </button>
+
+              {toneData && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setToneName('Default Chime');
+                    setToneData(undefined);
+                  }}
+                  className="p-1.5 text-[#72777d] hover:text-[#d33d33]"
+                  title="Reset to default chime"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 6. Android Permissions & Anti-Uninstall (Device Administrator) */}
+        <div className="border border-[#a2a9b1] bg-white p-4 shadow-2xs space-y-3">
+          <div className="text-[11px] font-semibold text-[#54595d] uppercase tracking-wider flex items-center gap-1.5">
+            <Smartphone className="w-3.5 h-3.5 text-[#3366cc]" />
+            Android Wakeup Protection
+          </div>
+
+          {/* Display Over Other Apps */}
+          <div className="flex items-center justify-between p-2.5 bg-[#f8f9fa] border border-[#c8ccd1] rounded-xs">
+            <div className="pr-2">
+              <div className="text-xs font-bold text-[#202122]">
+                Display over other apps
+              </div>
+              <div className="text-[11px] text-[#54595d]">
+                Rings fullscreen even when using other apps or locked
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleRequestOverlay}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-xs border transition-colors shrink-0 ${
+                overlayGranted
+                  ? 'bg-[#e8f6f3] border-[#14866d] text-[#14866d]'
+                  : 'bg-white border-[#a2a9b1] text-[#3366cc] hover:bg-[#eaecf0]'
+              }`}
+            >
+              {overlayGranted ? 'Allowed' : 'Grant'}
+            </button>
+          </div>
+
+          {/* Device Administrator (Anti-Uninstall) */}
+          <div className="flex items-center justify-between p-2.5 bg-[#f8f9fa] border border-[#c8ccd1] rounded-xs">
+            <div className="pr-2">
+              <div className="text-xs font-bold text-[#202122] flex items-center gap-1">
+                <ShieldAlert className="w-3.5 h-3.5 text-[#78350f]" />
+                Device Administrator
+              </div>
+              <div className="text-[11px] text-[#54595d]">
+                Prevents quickly uninstalling the app in the morning
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleToggleDeviceAdmin}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-xs border transition-colors shrink-0 ${
+                deviceAdminActive
+                  ? 'bg-[#14866d] text-white border-[#14866d]'
+                  : 'bg-white border-[#a2a9b1] text-[#202122] hover:bg-[#eaecf0]'
+              }`}
+            >
+              {deviceAdminActive ? 'Active' : 'Enable'}
+            </button>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="border-t border-[#a2a9b1] pt-4 flex items-center justify-end gap-3">
           <button
             type="button"
-            onClick={onCancel}
-            className="px-5 py-2.5 text-xs font-medium text-[#202122] bg-[#f8f9fa] hover:bg-[#eaecf0] border border-[#a2a9b1] rounded-xs transition-colors min-h-[44px]"
+            onClick={handleCancel}
+            className="px-5 py-2 text-xs font-medium text-[#202122] bg-[#f8f9fa] hover:bg-[#eaecf0] border border-[#a2a9b1] rounded-xs transition-colors min-h-[44px]"
           >
             Cancel
           </button>
           <button
             type="button"
             onClick={handleSave}
-            className="px-6 py-2.5 text-xs font-bold text-white bg-[#3366cc] hover:bg-[#2a4b8d] active:bg-[#1a3875] rounded-xs transition-colors shadow-xs flex items-center gap-2 min-h-[44px]"
+            className="px-6 py-2 text-xs font-bold text-white bg-[#3366cc] hover:bg-[#2a4b8d] active:bg-[#1a3875] rounded-xs transition-colors shadow-xs flex items-center gap-2 min-h-[44px]"
           >
             <Check className="w-4 h-4" />
             Save Alarm
           </button>
         </div>
       </div>
+
+      {/* Snooze Numpad Modal */}
+      <NumpadModal
+        isOpen={isSnoozeNumpadOpen}
+        title="Set Snooze Duration"
+        initialValue={snoozeMinutes}
+        unit="minutes"
+        min={1}
+        max={60}
+        onConfirm={(val) => {
+          setSnoozeMinutes(val);
+          setIsSnoozeNumpadOpen(false);
+        }}
+        onClose={() => setIsSnoozeNumpadOpen(false)}
+      />
+
+      {/* Device Admin Confirmation Notice */}
+      {showAdminNotice && (
+        <div className="fixed inset-0 z-50 bg-[#202122]/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white border border-[#a2a9b1] p-5 shadow-2xl">
+            <h3 className="font-wiki-serif font-bold text-base text-[#202122] mb-2 flex items-center gap-1.5">
+              <ShieldAlert className="w-5 h-5 text-[#78350f]" />
+              Enable Device Administrator?
+            </h3>
+            <p className="text-xs text-[#54595d] leading-relaxed mb-4">
+              Activating Device Administrator prevents morning uninstallation of Alarmatron until you explicitly deactivate it in Android Settings. This guarantees you wake up on schedule!
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowAdminNotice(false)}
+                className="px-3 py-1.5 text-xs text-[#54595d] hover:bg-[#f8f9fa] border border-[#c8ccd1] rounded-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeviceAdmin}
+                className="px-4 py-1.5 text-xs font-bold text-white bg-[#14866d] hover:bg-[#0f6c58] rounded-xs"
+              >
+                Confirm & Enable
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
